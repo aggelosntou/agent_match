@@ -1,2 +1,2 @@
-export const API_BASE_URL = 'http://192.168.1.142:8000';
+export const API_BASE_URL = 'https://web-production-8c176.up.railway.app';
 
