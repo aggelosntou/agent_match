@@ -1,98 +1,62 @@
-from sqlmodel import select
+import os
+from dotenv import load_dotenv
+from supabase import create_client
 
-from database import get_session, create_db_and_tables
-from models import User
+load_dotenv()
+
+supabase = create_client(
+    os.environ["SUPABASE_URL"],
+    os.environ["SUPABASE_SERVICE_ROLE_KEY"],
+)
+
+SAMPLE_USERS = [
+    dict(email="alice@agentmatch.dev",   password="password123", name="Alice",   interests=["basketball", "tennis"],     location="Monastiraki", skill_level="intermediate", availability=["tonight", "tomorrow"]),
+    dict(email="bob@agentmatch.dev",     password="password123", name="Bob",     interests=["basketball"],               location="Monastiraki", skill_level="beginner",     availability=["tonight"]),
+    dict(email="diana@agentmatch.dev",   password="password123", name="Diana",   interests=["basketball", "drinks"],     location="Monastiraki", skill_level="intermediate", availability=["tonight"]),
+    dict(email="helen@agentmatch.dev",   password="password123", name="Helen",   interests=["basketball", "tennis"],     location="Monastiraki", skill_level="advanced",     availability=["tonight"]),
+    dict(email="charlie@agentmatch.dev", password="password123", name="Charlie", interests=["football"],                 location="Athens",      skill_level="advanced",     availability=["tomorrow"]),
+    dict(email="ethan@agentmatch.dev",   password="password123", name="Ethan",   interests=["basketball", "football"],   location="Athens",      skill_level="advanced",     availability=["tonight", "tomorrow"]),
+    dict(email="nina@agentmatch.dev",    password="password123", name="Nina",    interests=["drinks", "coffee"],         location="Athens",      skill_level="beginner",     availability=["tonight", "tomorrow"]),
+    dict(email="fiona@agentmatch.dev",   password="password123", name="Fiona",   interests=["tennis"],                   location="Piraeus",     skill_level="beginner",     availability=["tonight"]),
+    dict(email="adam@agentmatch.dev",    password="password123", name="Adam",    interests=["drinks", "coffee"],         location="Budapest",    skill_level="beginner",     availability=["tonight", "tomorrow"]),
+    dict(email="petra@agentmatch.dev",   password="password123", name="Petra",   interests=["football", "drinks"],       location="Budapest",    skill_level="intermediate", availability=["tonight"]),
+    dict(email="marc@agentmatch.dev",    password="password123", name="Marc",    interests=["football", "basketball"],   location="Barcelona",   skill_level="intermediate", availability=["tonight", "tomorrow"]),
+    dict(email="laia@agentmatch.dev",    password="password123", name="Laia",    interests=["tennis", "drinks"],         location="Barcelona",   skill_level="beginner",     availability=["tonight"]),
+    dict(email="emma@agentmatch.dev",    password="password123", name="Emma",    interests=["tennis", "coffee"],         location="London",      skill_level="intermediate", availability=["tonight", "tomorrow"]),
+    dict(email="jack@agentmatch.dev",    password="password123", name="Jack",    interests=["football", "drinks"],       location="London",      skill_level="beginner",     availability=["tonight"]),
+]
 
 
-def seed_users():
-    create_db_and_tables()
-    
-    sample_users = [
-        User(
-            name="Alice",
-            interests=["basketball", "tennis"],
-            location="Monastiraki",
-            skill_level="intermediate",
-            availability=["tonight", "tomorrow"],
-        ),
-        User(
-            name="Bob",
-            interests=["basketball"],
-            location="Monastiraki",
-            skill_level="beginner",
-            availability=["tonight"],
-        ),
-        User(
-            name="Charlie",
-            interests=["football"],
-            location="Athens",
-            skill_level="advanced",
-            availability=["tomorrow"],
-        ),
-        User(
-            name="Diana",
-            interests=["basketball"],
-            location="Monastiraki",
-            skill_level="intermediate",
-            availability=["tonight"],
-        ),
-        User(
-            name="Ethan",
-            interests=["basketball", "football"],
-            location="Athens",
-            skill_level="advanced",
-            availability=["tonight", "tomorrow"],
-        ),
-        User(
-            name="Fiona",
-            interests=["tennis"],
-            location="Piraeus",
-            skill_level="beginner",
-            availability=["tonight"],
-        ),
-        User(
-            name="George",
-            interests=["basketball"],
-            location="Monastiraki",
-            skill_level="intermediate",
-            availability=["tomorrow"],
-        ),
-        User(
-            name="Helen",
-            interests=["basketball", "tennis"],
-            location="Monastiraki",
-            skill_level="advanced",
-            availability=["tonight"],
-        ),
-        User(
-            name="Ivan",
-            interests=["football"],
-            location="Athens",
-            skill_level="intermediate",
-            availability=["tomorrow"],
-        ),
-        User(
-            name="Julia",
-            interests=["basketball"],
-            location="Piraeus",
-            skill_level="intermediate",
-            availability=["tonight", "tomorrow"],
-        ),
-    ]
+def seed():
+    existing = supabase.table("profiles").select("id").execute()
+    if existing.data:
+        print(f"Already have {len(existing.data)} profiles. Skipping.")
+        return
 
-    with get_session() as session:
-        existing_users = session.exec(select(User)).all()
+    print(f"Seeding {len(SAMPLE_USERS)} users...")
+    for u in SAMPLE_USERS:
+        # Create auth user
+        res = supabase.auth.admin.create_user({
+            "email": u["email"],
+            "password": u["password"],
+            "email_confirm": True,
+        })
+        user_id = res.user.id
 
-        if existing_users:
-            print("Database already has users. Skipping seed.")
-            return
+        # Create profile
+        supabase.table("profiles").insert({
+            "id": user_id,
+            "name": u["name"],
+            "interests": u["interests"],
+            "location": u["location"],
+            "skill_level": u["skill_level"],
+            "availability": u["availability"],
+        }).execute()
 
-        for user in sample_users:
-            session.add(user)
+        print(f"  ✓ {u['name']} ({u['location']})")
 
-        session.commit()
-        print("Seeded sample users.")
+    print("Done.")
 
 
 if __name__ == "__main__":
-    seed_users()
+    seed()

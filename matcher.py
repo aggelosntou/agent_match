@@ -1,76 +1,81 @@
+import json
+import os
 from typing import List, Optional
 
-from models import ParsedPrompt, User, MatchResult
-from data import (
-    KNOWN_ACTIVITIES,
-    KNOWN_LOCATIONS,
-    KNOWN_SKILL_LEVELS,
-    KNOWN_AVAILABILITY,
-    SKILL_ORDER,
-)
+from groq import Groq
+from dotenv import load_dotenv
+
+from models import ParsedPrompt, UserPublic, MatchResult
+from data import SKILL_ORDER
+
+load_dotenv()
+
+_client: Optional[Groq] = None
+
+
+def _get_client() -> Groq:
+    global _client
+    if _client is None:
+        _client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
+    return _client
+
+
+_PARSE_SYSTEM = """\
+You are a parser for a social activity matching app. Extract structured intent from a user's natural-language message.
+
+Return ONLY a JSON object with these fields (use null for anything not mentioned):
+- "activity": what they want to do (e.g. "basketball", "drinks", "coffee", "hiking", "football") — lowercase, single word or short phrase
+- "location": where they want to do it (any city, neighborhood, or area) — properly capitalised
+- "skill_level": one of "beginner", "intermediate", "advanced" — null if not mentioned
+- "availability": when they want (e.g. "tonight", "tomorrow", "this weekend", "friday evening") — lowercase
+- "group_size": total number of people they want in the group including themselves (integer) — null if not mentioned
+
+Examples:
+  Input: "Find me 4 people that want to play basketball tonight at Athens"
+  Output: {"activity": "basketball", "location": "Athens", "skill_level": null, "availability": "tonight", "group_size": 5}
+
+  Input: "anybody free tonight to have a drink at Monastiraki"
+  Output: {"activity": "drinks", "location": "Monastiraki", "skill_level": null, "availability": "tonight", "group_size": null}
+
+  Input: "looking for 2 intermediate tennis players in Barcelona tomorrow"
+  Output: {"activity": "tennis", "location": "Barcelona", "skill_level": "intermediate", "availability": "tomorrow", "group_size": 3}
+
+Return ONLY the JSON object, no markdown, no explanation.\
+"""
 
 
 def parse_prompt(prompt: str) -> ParsedPrompt:
-    text = prompt.lower()
-
-    activity = None
-    location = None
-    skill_level = None
-    availability = None
-    group_size = None
-
-    if "this evening" in text:
-        text = text.replace("this evening", "tonight")
-
-    if "advanced players" in text:
-        text = text.replace("advanced players", "advanced")
-
-    if "intermediate players" in text:
-        text = text.replace("intermediate players", "intermediate")
-
-    if "beginner players" in text:
-        text = text.replace("beginner players", "beginner")
-
-    for act in KNOWN_ACTIVITIES:
-        if act in text:
-            activity = act
-
-    for loc in KNOWN_LOCATIONS:
-        if loc in text:
-            location = loc.capitalize()
-
-    for skill in KNOWN_SKILL_LEVELS:
-        if skill in text:
-            skill_level = skill
-
-    for time_word in KNOWN_AVAILABILITY:
-        if time_word in text:
-            availability = time_word
-
-    words = text.split()
-
-    for i, word in enumerate(words):
-        if word == "need" and i + 1 < len(words) and words[i + 1].isdigit():
-            group_size = int(words[i + 1]) + 1
-            break
-
-        if word.isdigit() and group_size is None:
-            group_size = int(word)
-
-    return ParsedPrompt(
-        activity=activity,
-        location=location,
-        skill_level=skill_level,
-        availability=availability,
-        group_size=group_size,
-    )
+    try:
+        client = _get_client()
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            max_tokens=256,
+            messages=[
+                {"role": "system", "content": _PARSE_SYSTEM},
+                {"role": "user", "content": prompt},
+            ],
+        )
+        raw = response.choices[0].message.content.strip()
+        data = json.loads(raw)
+        return ParsedPrompt(
+            activity=data.get("activity"),
+            location=data.get("location"),
+            skill_level=data.get("skill_level"),
+            availability=data.get("availability"),
+            group_size=data.get("group_size"),
+        )
+    except Exception:
+        return ParsedPrompt()
 
 
-def score_user(user: User, parsed: ParsedPrompt) -> int:
+def score_user(user: UserPublic, parsed: ParsedPrompt) -> int:
     score = 0
 
-    if parsed.activity is not None and parsed.activity in user.interests:
-        score += 3
+    if parsed.activity is not None:
+        for interest in user.interests:
+            if parsed.activity.lower() in interest.lower() or interest.lower() in parsed.activity.lower():
+                score += 3
+                break
 
     if parsed.location is not None and parsed.location.lower() == user.location.lower():
         score += 2
@@ -78,13 +83,16 @@ def score_user(user: User, parsed: ParsedPrompt) -> int:
     if parsed.skill_level is not None and parsed.skill_level == user.skill_level:
         score += 2
 
-    if parsed.availability is not None and parsed.availability in user.availability:
-        score += 2
+    if parsed.availability is not None:
+        for slot in user.availability:
+            if parsed.availability.lower() in slot.lower() or slot.lower() in parsed.availability.lower():
+                score += 2
+                break
 
     return score
 
 
-def match_users(parsed: ParsedPrompt, users: List[User]) -> List[MatchResult]:
+def match_users(parsed: ParsedPrompt, users: List[UserPublic]) -> List[MatchResult]:
     if (
         parsed.activity is None
         and parsed.location is None
@@ -94,11 +102,10 @@ def match_users(parsed: ParsedPrompt, users: List[User]) -> List[MatchResult]:
         return []
 
     results: List[MatchResult] = []
-
     for user in users:
-        score = score_user(user, parsed)
-        if score > 0:
-            results.append(MatchResult(user=user, score=score))
+        s = score_user(user, parsed)
+        if s > 0:
+            results.append(MatchResult(user=user, score=s))
 
     results.sort(key=lambda x: x.score, reverse=True)
     return results
@@ -107,29 +114,18 @@ def match_users(parsed: ParsedPrompt, users: List[User]) -> List[MatchResult]:
 def skill_distance(requested_skill: Optional[str], user_skill: str) -> int:
     if requested_skill is None:
         return 0
-
-    requested_value = SKILL_ORDER.get(requested_skill)
-    user_value = SKILL_ORDER.get(user_skill)
-
-    if requested_value is None or user_value is None:
+    rv = SKILL_ORDER.get(requested_skill)
+    uv = SKILL_ORDER.get(user_skill)
+    if rv is None or uv is None:
         return 99
+    return abs(rv - uv)
 
-    return abs(requested_value - user_value)
 
-
-def select_group(matches: List[MatchResult], parsed: ParsedPrompt) -> List[User]:
+def select_group(matches: List[MatchResult], parsed: ParsedPrompt) -> List[UserPublic]:
     if parsed.group_size is None or parsed.group_size <= 1:
         return []
 
-    needed_people = parsed.group_size - 1
-    min_score = 7
-
-    strong_matches = [match for match in matches if match.score >= min_score]
-    strong_matches.sort(
-        key=lambda match: (
-            skill_distance(parsed.skill_level, match.user.skill_level),
-            -match.score,
-        )
-    )
-
-    return [match.user for match in strong_matches[:needed_people]]
+    needed = parsed.group_size - 1
+    strong = [m for m in matches if m.score >= 5]
+    strong.sort(key=lambda m: (skill_distance(parsed.skill_level, m.user.skill_level), -m.score))
+    return [m.user for m in strong[:needed]]

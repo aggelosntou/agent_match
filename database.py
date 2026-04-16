@@ -1,13 +1,16 @@
-from sqlmodel import SQLModel, Session, create_engine
+import os
+from dotenv import load_dotenv
+from supabase import create_client, Client
 
-DATABASE_URL = "sqlite:///agent_match.db"
+load_dotenv()
 
-engine = create_engine(DATABASE_URL, echo=False)
-
-
-def create_db_and_tables():
-    SQLModel.metadata.create_all(engine)
+_client: Client | None = None
 
 
-def get_session():
-    return Session(engine)
+def get_supabase() -> Client:
+    global _client
+    if _client is None:
+        url = os.environ["SUPABASE_URL"]
+        key = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
+        _client = create_client(url, key)
+    return _client
